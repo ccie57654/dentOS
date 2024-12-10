@@ -136,6 +136,8 @@ onlp_sysi_onie_data_free(uint8_t* data)
 #define FAN_DUTY_MAX (100)
 #define FAN_DUTY_MID  (75)
 #define FAN_DUTY_LOW  (50)
+#define FAN_DUTY_ECO  (25)
+#define FAN_DUTY_DEFAULT FAN_DUTY_LOW
 #define MAX_CHASSIS_FAN_COUNT 6
 
 static int
@@ -197,83 +199,78 @@ sysi_fanctrl_thermal_sensor_policy(onlp_fan_info_t fi[MAX_CHASSIS_FAN_COUNT],
 {
     int i;
     int fanduty;
+    int below = 1;
+    int sum_mcelsius = 0;
     as4224_platform_id_t pid = get_platform_id();
+
+    for (i = (THERMAL_1_ON_MAIN_BROAD); i <= (THERMAL_CPU_CORE); i++) {
+        sum_mcelsius += ti[i-1].mcelsius;
+    }
 
     if (pid >= AS4224_52T) {
         pid = AS4224_52T; /* AS4224_52T/AS4224_52T_DAC use the same policy */
-    }
+    }	
 
-	*adjusted = 0;
+    *adjusted = 0;
 
     if (onlp_file_read_int(&fanduty, "%s%s", FAN_SYSFS_PATH, "fan2_duty_cycle_percentage") < 0) {
         *adjusted = 1;
         return sysi_fanctrl_fan_set_duty(FAN_DUTY_MAX, num_of_fan);
     }
 
+    int threshold_eco[] = {153500, 150500, 150500};
+    int threshold_low[] = {251550, 225440, 225820};
+    int threshold_mid[] = {331550, 289440, 359820};
+    int *pthreshold[] = {threshold_eco, threshold_low, threshold_mid};
+
     switch (fanduty) {
-	case FAN_DUTY_LOW:
+	case FAN_DUTY_ECO:
     {
-        int threshold_48x[] = {51000, 48500, 66000, 55000, 62440};
-        int threshold_52p[] = {51500, 49900, 58000, 56360, 61590};
-        int threshold_52t[] = {51500, 51200, 58000, 57520, 55250};
-        int *pthreshold[] = {threshold_48x, threshold_52p, threshold_52t};
-
-        for (i = (THERMAL_1_ON_MAIN_BROAD); i <= (THERMAL_CPU_CORE); i++) {
-            if (ti[i-1].mcelsius < pthreshold[pid][i-1]) {
-                continue;
-            }
-
-            *adjusted = 1;
-            return sysi_fanctrl_fan_set_duty(FAN_DUTY_MID, num_of_fan);
-        }
-
-		break;
-    }
-	case FAN_DUTY_MID:
-    {
-        int threshold_48x[] = {58500, 54500, 80500, 62500, 75550};
-        int threshold_52p[] = {62000, 60440, 76000, 73700, 85700};
-        int threshold_52t[] = {64000, 63590, 76000, 75180, 81050};
-        int *pthreshold[] = {threshold_48x, threshold_52p, threshold_52t};
-
-        for (i = (THERMAL_1_ON_MAIN_BROAD); i <= (THERMAL_CPU_CORE); i++) {
-            if (ti[i-1].mcelsius < pthreshold[pid][i-1]) {
-                continue;
-            }
-
-            *adjusted = 1;
-            return sysi_fanctrl_fan_set_duty(FAN_DUTY_MAX, num_of_fan);
-        }
-
-		break;
-    }
-	case FAN_DUTY_MAX:
-    {
-        int threshold_48x[] = {49000, 46500, 64000, 53000, 60440};
-        int threshold_52p[] = {49500, 47900, 56000, 54360, 59590};
-        int threshold_52t[] = {49500, 49200, 56000, 55520, 53250};
-        int *pthreshold[] = {threshold_48x, threshold_52p, threshold_52t};
-        int below = 1;
-
-        for (i = (THERMAL_1_ON_MAIN_BROAD); i <= (THERMAL_CPU_CORE); i++) {
-            if (ti[i-1].mcelsius <= pthreshold[pid][i-1]) {
-                continue;
-            }
-
-            below = 0;
-            break;
-        }
-
-        if (below) {
+        if (sum_mcelsius >= pthreshold[0][pid]) {
             *adjusted = 1;
             return sysi_fanctrl_fan_set_duty(FAN_DUTY_LOW, num_of_fan);
         }
 
-		break;
+        break;
+    }
+	case FAN_DUTY_LOW:
+    {
+        if (sum_mcelsius >= pthreshold[1][pid]) {
+            *adjusted = 1;
+            return sysi_fanctrl_fan_set_duty(FAN_DUTY_MID, num_of_fan);
+        }
+        else if (sum_mcelsius <= pthreshold[0][pid]) {
+            *adjusted = 1;
+            return sysi_fanctrl_fan_set_duty(FAN_DUTY_ECO, num_of_fan);
+        }
+
+        break;
+    }
+	case FAN_DUTY_MID:
+    {
+        if (sum_mcelsius >= pthreshold[2][pid]) {
+            *adjusted = 1;
+            return sysi_fanctrl_fan_set_duty(FAN_DUTY_MAX, num_of_fan);
+        }
+        else if (sum_mcelsius <= pthreshold[1][pid]) {
+            *adjusted = 1;
+            return sysi_fanctrl_fan_set_duty(FAN_DUTY_LOW, num_of_fan);
+        }
+
+        break;
+    }
+	case FAN_DUTY_MAX:
+    {
+        if (sum_mcelsius <= pthreshold[1][pid]) {
+            *adjusted = 1;
+            return sysi_fanctrl_fan_set_duty(FAN_DUTY_LOW, num_of_fan);
+        }
+
+        break;
     }
 	default:
         *adjusted = 1;
-        return sysi_fanctrl_fan_set_duty(FAN_DUTY_MAX, num_of_fan);
+        return sysi_fanctrl_fan_set_duty(FAN_DUTY_DEFAULT, num_of_fan);
     }
 
     /* Set as current speed to kick watchdog */
